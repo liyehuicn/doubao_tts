@@ -17,7 +17,7 @@ class VolcanoTTS:
     def __init__(self, root):
         self.root = root
         self.root.title("火山引擎语音合成（双模式版）")
-        self.root.geometry("850x750")
+        self.root.geometry("850x800")  # 增加高度以容纳新控件
         self.root.resizable(False, False)  
         
         # 创建加密密钥
@@ -31,6 +31,7 @@ class VolcanoTTS:
         self.config = self._load_config()
         self.default_api_key = self.config.get("api_key", "")
         self.voice_id = self.config.get("voice_id", "")
+        self.default_speed = self.config.get("speed", 1.0)  # 默认语速
         
         # 音频相关变量
         self.base64_audio = None
@@ -40,6 +41,7 @@ class VolcanoTTS:
         self.is_playing = False
         self.current_segment = 0
         self.raw_responses = []  # 存储所有API响应
+        self.playback_start_time = 0  # 播放开始的系统时间（毫秒）
         
         # 初始化音频播放器
         pygame.mixer.init()
@@ -88,7 +90,8 @@ class VolcanoTTS:
         config_path = "config.json"
         default_config = {
             "api_key": "",
-            "voice_id": ""
+            "voice_id": "",
+            "speed": 1.0  # 新增语速配置
         }
         
         # 如果配置文件不存在则创建
@@ -111,7 +114,8 @@ class VolcanoTTS:
             # 解密配置信息
             return {
                 "api_key": self._decrypt_data(config.get("api_key", "")),
-                "voice_id": self._decrypt_data(config.get("voice_id", ""))
+                "voice_id": self._decrypt_data(config.get("voice_id", "")),
+                "speed": float(config.get("speed", 1.0))  # 新增语速配置
             }
         except Exception as e:
             self._log(f"读取配置文件失败: {str(e)}")
@@ -121,10 +125,14 @@ class VolcanoTTS:
         """保存配置到外部文件（加密存储敏感信息）"""
         config_path = "config.json"
         try:
+            # 获取当前语速值
+            current_speed = self.speed_scale.get()
+            
             # 加密配置信息后保存
             encrypted_config = {
                 "api_key": self._encrypt_data(self.api_key_entry.get().strip()),
-                "voice_id": self._encrypt_data(self.voice_id_entry.get().strip())
+                "voice_id": self._encrypt_data(self.voice_id_entry.get().strip()),
+                "speed": current_speed  # 新增保存语速配置
             }
             
             with open(config_path, "w", encoding="utf-8") as f:
@@ -183,8 +191,32 @@ class VolcanoTTS:
         config_btn = ttk.Button(voice_row, text="保存配置", command=self._save_config)
         config_btn.pack(side=tk.LEFT)
         
-        # 3. 配音模式选择
-        mode_frame = ttk.LabelFrame(self.main_container, text="3. 配音模式", padding=(15, 10))
+        # 新增：语速调节区域
+        speed_frame = ttk.LabelFrame(self.main_container, text="3. 语速调节", padding=(15, 10))
+        speed_frame.pack(fill=tk.X, padx=20, pady=5)
+        
+        speed_row = ttk.Frame(speed_frame)
+        speed_row.pack(fill=tk.X, pady=5)
+        ttk.Label(speed_row, text="语速：").pack(side=tk.LEFT, padx=(0, 10))
+        
+        # 语速滑块，范围0.5-1.5倍，步长0.1
+        self.speed_scale = ttk.Scale(
+            speed_row, 
+            from_=0.5, 
+            to=1.6, 
+            orient="horizontal", 
+            length=300,
+            value=self.default_speed,
+            command=self._update_speed_label
+        )
+        self.speed_scale.pack(side=tk.LEFT, padx=(0, 10))
+        
+        # 显示当前语速
+        self.speed_label = ttk.Label(speed_row, text=f"{self.default_speed:.1f}x")
+        self.speed_label.pack(side=tk.LEFT)
+        
+        # 3. 配音模式选择（原3改为4）
+        mode_frame = ttk.LabelFrame(self.main_container, text="4. 配音模式", padding=(15, 10))
         mode_frame.pack(fill=tk.X, padx=20, pady=5)
         
         # 使用Frame包装模式选择
@@ -200,16 +232,16 @@ class VolcanoTTS:
         self.content_container = ttk.Frame(self.main_container)
         self.content_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
         
-        # 4. 文本输入区域（文本模式）
-        self.text_frame = ttk.LabelFrame(self.content_container, text="4. 合成文本", padding=(15, 10))
+        # 4. 文本输入区域（文本模式，原4改为5）
+        self.text_frame = ttk.LabelFrame(self.content_container, text="5. 合成文本", padding=(15, 10))
         self.text_frame.pack(fill=tk.BOTH, expand=True)
         
         self.text_input = tk.Text(self.text_frame, height=6, width=75)
         self.text_input.pack(fill=tk.BOTH, expand=True)
         self.text_input.insert(tk.END, "你是否也曾这样，心里很想和某个人聊天，却希望他先来找你，呆呆的看着他的头像一遍又一遍。")
         
-        # 5. 字幕文件区域（字幕模式，默认隐藏）
-        self.subtitle_frame = ttk.LabelFrame(self.content_container, text="4. 字幕文件", padding=(15, 10))
+        # 5. 字幕文件区域（字幕模式，默认隐藏，原5改为6）
+        self.subtitle_frame = ttk.LabelFrame(self.content_container, text="5. 字幕文件", padding=(15, 10))
         # 默认不显示，通过模式切换显示
         
         # 使用Frame包装字幕文件选择行
@@ -223,7 +255,7 @@ class VolcanoTTS:
         self.subtitle_preview = tk.Text(self.subtitle_frame, height=6, width=75)
         self.subtitle_preview.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
         
-        # 6. 按钮区域
+        # 6. 按钮区域（原6改为7）
         btn_frame = ttk.Frame(self.main_container, padding=(15, 10))
         btn_frame.pack(fill=tk.X, padx=20, pady=5)
         
@@ -242,12 +274,12 @@ class VolcanoTTS:
         self.show_log_btn = ttk.Button(btn_frame, text="查看响应", command=self._show_raw, state="disabled")
         self.show_log_btn.pack(side="left", padx=10)
         
-        # 7. 进度条
+        # 7. 进度条（原7改为8）
         self.progress = ttk.Progressbar(self.main_container, orient="horizontal", length=100, mode="determinate")
         self.progress.pack(fill=tk.X, padx=20, pady=5)
         
-        # 8. 操作日志区域（固定在最底部）
-        log_frame = ttk.LabelFrame(root, text="5. 操作日志", padding=(15, 10))
+        # 8. 操作日志区域（固定在最底部，原8改为9）
+        log_frame = ttk.LabelFrame(root, text="9. 操作日志", padding=(15, 10))
         # 使用root作为父容器而不是main_container，确保它在最底部
         log_frame.pack(fill=tk.BOTH, expand=False, padx=20, pady=(5, 15), side=tk.BOTTOM)
         
@@ -257,6 +289,11 @@ class VolcanoTTS:
         scrollbar = ttk.Scrollbar(log_frame, command=self.log_text.yview)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.config(yscrollcommand=scrollbar.set)
+    
+    def _update_speed_label(self, value):
+        """更新语速显示标签"""
+        speed = round(float(value), 1)
+        self.speed_label.config(text=f"{speed}x")
     
     def _toggle_api_key_visibility(self):
         """切换API Key显示/隐藏状态"""
@@ -390,6 +427,9 @@ class VolcanoTTS:
             messagebox.showerror("错误", "请输入x-api-key！")
             return
         
+        # 获取语速值（限制在0.5-1.5之间）
+        self.speed_ratio = max(0.5, min(1.5, round(float(self.speed_scale.get()), 1)))
+        
         # 停止可能的播放
         self._stop_audio()
         
@@ -410,7 +450,7 @@ class VolcanoTTS:
                 self.gen_btn.config(state="normal")
                 return
             
-            self._log("开始生成文本语音...")
+            self._log(f"开始生成文本语音（语速：{self.speed_ratio}x）...")
             threading.Thread(
                 target=self._generate_text_audio,
                 args=(self.api_key, self.voice_id, text),
@@ -422,7 +462,7 @@ class VolcanoTTS:
                 self.gen_btn.config(state="normal")
                 return
             
-            self._log(f"开始生成{len(self.subtitles)}条字幕配音...")
+            self._log(f"开始生成{len(self.subtitles)}条字幕配音（语速：{self.speed_ratio}x）...")
             self.progress["maximum"] = len(self.subtitles)
             self.raw_responses = []  # 重置响应列表
             threading.Thread(
@@ -440,7 +480,7 @@ class VolcanoTTS:
                 "audio": {
                     "voice_type": voice_id,
                     "encoding": "mp3",
-                    "speed_ratio": 1.0
+                    "speed_ratio": self.speed_ratio  # 使用选择的语速
                 },
                 "request": {
                     "reqid": str(uuid.uuid4()).replace("-", ""),
@@ -492,367 +532,268 @@ class VolcanoTTS:
                 else:
                     self._log(f"业务失败：code={result.get('code')}，message={result.get('message')}")
             else:
-                self._log(f"HTTP失败：状态码{response.status_code}")
-        
-        except requests.exceptions.RequestException as e:
-            self._log(f"网络请求错误：{str(e)}")
+                self._log(f"API请求失败：状态码{response.status_code}")
         except Exception as e:
-            self._log(f"处理错误：{str(e)}")
+            self._log(f"生成语音失败：{str(e)}")
         finally:
             self.root.after(0, lambda: self.gen_btn.config(state="normal"))
     
     def _generate_subtitle_audio(self, api_key, voice_id):
-        """生成字幕配音"""
+        """生成字幕文件配音"""
         try:
-            self.audio_segments = []  # 重置音频片段
+            self.audio_segments = []  # 重置音频段列表
             
             for i, subtitle in enumerate(self.subtitles):
-                # 计算需要的语速
-                text_length = len(subtitle['text'])
-                if text_length == 0:
-                    self._log(f"跳过空字幕 {subtitle['index']}")
-                    self.progress["value"] = i + 1
+                # 更新进度条
+                self.root.after(0, lambda val=i+1: self.progress.config(value=val))
+                
+                text = subtitle['text']
+                if not text:
+                    self._log(f"跳过空字幕 #{subtitle['index']}")
                     continue
                     
-                # 字幕时长(秒)
-                subtitle_duration = subtitle['duration'] / 1000
-                # 预估正常语速下的语音时长(秒)
-                estimated_duration = text_length * 0.3
-                # 计算语速比例(最大不超过2.0，最小不低于0.5)
-                speed_ratio = min(max(estimated_duration / subtitle_duration, 0.5), 2.0)
+                self._log(f"正在处理字幕 #{subtitle['index']}: {text[:30]}...")
                 
-                self._log(
-                    f"处理字幕 {subtitle['index']}: 文本长度{text_length}，"
-                    f"字幕时长{subtitle_duration:.2f}s，预估语速{speed_ratio:.2f}x"
-                )
+                req_data = {
+                    "app": {"cluster": "volcano_icl"},
+                    "user": {"uid": "豆包语音"},
+                    "audio": {
+                        "voice_type": voice_id,
+                        "encoding": "mp3",
+                        "speed_ratio": self.speed_ratio  # 使用选择的语速
+                    },
+                    "request": {
+                        "reqid": str(uuid.uuid4()).replace("-", ""),
+                        "text": text,
+                        "operation": "query"
+                    }
+                }
                 
-                # 生成当前片段语音
-                audio_data = self._generate_single_segment(
-                    api_key, voice_id, subtitle['text'], speed_ratio
-                )
+                headers = {
+                    "x-api-key": api_key,
+                    "Content-Type": "application/json"
+                }
                 
-                if audio_data:
-                    self.audio_segments.append({
-                        'start': subtitle['start'],
-                        'end': subtitle['end'],
-                        'audio': audio_data,
-                        'text': subtitle['text']
-                    })
+                try:
+                    response = requests.post(
+                        url="https://openspeech.bytedance.com/api/v1/tts",
+                        headers=headers,
+                        json=req_data,
+                        timeout=30
+                    )
+                    
+                    self.raw_responses.append(f"字幕 #{subtitle['index']} 响应:\n{response.text}")
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get("code") == 3000 and result.get("message") == "Success":
+                            base64_audio = result.get("data")
+                            if base64_audio:
+                                audio_data = base64.b64decode(base64_audio)
+                                self.audio_segments.append({
+                                    'data': audio_data,
+                                    'subtitle': subtitle
+                                })
+                                self._log(f"成功生成字幕 #{subtitle['index']} 音频")
+                            else:
+                                self._log(f"字幕 #{subtitle['index']} 无音频数据")
+                        else:
+                            self._log(f"字幕 #{subtitle['index']} 业务失败: {result.get('message')}")
+                    else:
+                        self._log(f"字幕 #{subtitle['index']} 请求失败: 状态码{response.status_code}")
+                        
+                except Exception as e:
+                    self._log(f"处理字幕 #{subtitle['index']} 出错: {str(e)}")
                 
-                # 更新进度条
-                self.root.after(0, lambda v=i+1: self.progress.configure(value=v))
+                # 避免请求过于频繁
+                time.sleep(0.5)
             
-            self._log(f"全部字幕处理完成，成功生成{len(self.audio_segments)}段语音")
-            
-            # 启用相关按钮
-            self.root.after(0, lambda: self.play_btn.config(state="normal"))
-            self.root.after(0, lambda: self.save_btn.config(state="normal"))
+            self._log(f"字幕配音生成完成，共成功生成 {len(self.audio_segments)}/{len(self.subtitles)} 段音频")
             self.root.after(0, lambda: self.show_log_btn.config(state="normal"))
-            
+            if self.audio_segments:
+                self.root.after(0, lambda: self.play_btn.config(state="normal"))
+                self.root.after(0, lambda: self.save_btn.config(state="normal"))
+                
         except Exception as e:
-            self._log(f"批量生成错误：{str(e)}")
+            self._log(f"生成字幕配音失败：{str(e)}")
         finally:
             self.root.after(0, lambda: self.gen_btn.config(state="normal"))
     
-    def _generate_single_segment(self, api_key, voice_id, text, speed_ratio):
-        """生成单个字幕片段的语音"""
-        try:
-            req_data = {
-                "app": {"cluster": "volcano_icl"},
-                "user": {"uid": "豆包语音"},
-                "audio": {
-                    "voice_type": voice_id,
-                    "encoding": "mp3",
-                    "speed_ratio": speed_ratio  # 使用计算出的语速
-                },
-                "request": {
-                    "reqid": str(uuid.uuid4()).replace("-", ""),
-                    "text": text,
-                    "operation": "query"
-                }
-            }
-            
-            headers = {
-                "x-api-key": api_key,
-                "Content-Type": "application/json"
-            }
-            
-            response = requests.post(
-                url="https://openspeech.bytedance.com/api/v1/tts",
-                headers=headers,
-                json=req_data,
-                timeout=30
-            )
-            
-            self.raw_responses.append(f"字幕 {text[:10]}...: {response.text[:200]}")
-            
-            if response.status_code == 200:
-                result = response.json()
-                if result.get("code") == 3000 and result.get("message") == "Success":
-                    base64_audio = result.get("data")
-                    if base64_audio:
-                        return base64.b64decode(base64_audio)
-                    else:
-                        self._log("错误：response.data为空")
-                else:
-                    self._log(f"业务失败：code={result.get('code')}，message={result.get('message')}")
-            else:
-                self._log(f"HTTP失败：状态码{response.status_code}")
-                
-        except Exception as e:
-            self._log(f"生成单段语音错误：{str(e)}")
-        return None
-    
     def _play_audio(self):
-        """根据模式播放音频"""
-        mode = self.mode_var.get()
-        if mode == "text":
+        """播放音频（根据模式选择不同播放方式）"""
+        if self.mode_var.get() == "text":
             self._play_text_audio()
         else:
             self._play_subtitle_audio()
     
     def _play_text_audio(self):
-        """播放文本直接生成的音频"""
+        """播放文本生成的音频"""
         if not self.audio_data:
-            messagebox.showerror("错误", "无音频数据，请先生成！")
+            messagebox.showinfo("提示", "没有可播放的音频数据")
             return
-        
-        # 停止当前播放（如果有的话）
-        if self.is_playing:
-            self._stop_audio()
-        
-        try:
-            # 从内存数据创建音频流
-            audio_stream = BytesIO(self.audio_data)
-            pygame.mixer.music.load(audio_stream)
-            pygame.mixer.music.play()
             
+        try:
+            # 停止当前播放
+            pygame.mixer.stop()
+            
+            # 加载音频数据
+            sound = pygame.mixer.Sound(BytesIO(self.audio_data))
+            sound.play()
+            
+            # 更新状态
             self.is_playing = True
             self.play_btn.config(state="disabled")
             self.stop_btn.config(state="normal")
             self._log("开始播放音频...")
             
-            # 启动播放状态检查线程
-            threading.Thread(target=self._check_play_status, daemon=True).start()
+            # 检查播放状态的定时器
+            self._check_playback_status()
             
         except Exception as e:
             self._log(f"播放失败：{str(e)}")
             self.is_playing = False
-            self.play_btn.config(state="normal")
-            self.stop_btn.config(state="disabled")
     
     def _play_subtitle_audio(self):
-        """按顺序播放所有字幕音频片段"""
+        """播放字幕生成的分段音频"""
         if not self.audio_segments:
-            messagebox.showerror("错误", "无音频数据，请先生成！")
+            messagebox.showinfo("提示", "没有可播放的音频段")
             return
-        
-        # 停止当前播放
-        if self.is_playing:
-            self._stop_audio()
-        
-        self.is_playing = True
-        self.current_segment = 0
-        self.play_btn.config(state="disabled")
-        self.stop_btn.config(state="normal")
-        self._log("开始播放配音...")
-        
-        # 启动播放线程
-        threading.Thread(target=self._play_segments, daemon=True).start()
-    
-    def _play_segments(self):
-        """按顺序播放音频片段"""
+            
         try:
-            start_time = time.time() * 1000  # 开始播放的毫秒时间
+            # 停止当前播放
+            pygame.mixer.stop()
             
-            for i, segment in enumerate(self.audio_segments):
-                if not self.is_playing:
-                    break
-                    
-                self.current_segment = i
-                self._log(f"播放片段 {i+1}/{len(self.audio_segments)}: {segment['text'][:20]}...")
-                
-                # 计算需要等待的时间（确保按字幕时间戳播放）
-                current_time = time.time() * 1000
-                elapsed = current_time - start_time
-                wait_time = (segment['start'] - elapsed) / 1000  # 转换为秒
-                
-                if wait_time > 0:
-                    time.sleep(wait_time)
-                
-                # 播放当前片段
-                audio_stream = BytesIO(segment['audio'])
-                pygame.mixer.music.load(audio_stream)
-                pygame.mixer.music.play()
-                
-                # 等待播放完成
-                while pygame.mixer.music.get_busy() and self.is_playing:
-                    time.sleep(0.1)
+            self.current_segment = 0
+            self.is_playing = True
+            self.play_btn.config(state="disabled")
+            self.stop_btn.config(state="normal")
+            self.playback_start_time = time.time() * 1000  # 记录开始时间（毫秒）
             
-            if self.is_playing:
-                self._log("所有片段播放完成")
-                
+            self._log("开始播放字幕音频...")
+            self._play_next_segment()
+            
         except Exception as e:
-            self._log(f"播放错误：{str(e)}")
-        finally:
+            self._log(f"播放失败：{str(e)}")
+            self.is_playing = False
+    
+    def _play_next_segment(self):
+        """播放下一段音频"""
+        if not self.is_playing or self.current_segment >= len(self.audio_segments):
+            self._stop_audio()
+            self._log("字幕音频播放完成")
+            return
+            
+        # 获取当前段
+        segment = self.audio_segments[self.current_segment]
+        subtitle = segment['subtitle']
+        
+        # 计算需要等待的时间（根据字幕时间戳）
+        current_time = time.time() * 1000 - self.playback_start_time
+        wait_time = max(0, subtitle['start'] - current_time)
+        
+        self._log(f"准备播放第 {self.current_segment + 1} 段字幕（等待 {wait_time:.0f}ms）")
+        
+        # 延迟播放当前段
+        self.root.after(int(wait_time), self._play_current_segment)
+    
+    def _play_current_segment(self):
+        """播放当前段音频"""
+        if not self.is_playing:
+            return
+            
+        segment = self.audio_segments[self.current_segment]
+        subtitle = segment['subtitle']
+        
+        try:
+            # 加载并播放音频
+            sound = pygame.mixer.Sound(BytesIO(segment['data']))
+            sound.play()
+            self._log(f"正在播放第 {self.current_segment + 1} 段: {subtitle['text'][:30]}...")
+            
+            # 计算当前段播放时长（毫秒）
+            play_length = int(len(segment['data']) / 3.5)  # 粗略估算，实际应根据音频本身计算
+            
+            # 准备播放下一段
+            self.current_segment += 1
+            self.root.after(play_length, self._play_next_segment)
+            
+        except Exception as e:
+            self._log(f"播放第 {self.current_segment + 1} 段失败：{str(e)}")
+            self.current_segment += 1
+            self.root.after(100, self._play_next_segment)
+    
+    def _check_playback_status(self):
+        """检查音频播放状态"""
+        if not self.is_playing:
+            return
+            
+        if not pygame.mixer.get_busy():
+            self._log("音频播放完成")
             self.is_playing = False
             self.root.after(0, lambda: self.play_btn.config(state="normal"))
             self.root.after(0, lambda: self.stop_btn.config(state="disabled"))
-    
-    def _check_play_status(self):
-        """检查播放状态，播放结束后更新按钮状态"""
-        while self.is_playing:
-            if not pygame.mixer.music.get_busy():
-                self.is_playing = False
-                self.root.after(0, lambda: self.play_btn.config(state="normal"))
-                self.root.after(0, lambda: self.stop_btn.config(state="disabled"))
-                self._log("音频播放结束")
-                break
-            time.sleep(0.5)
+            return
+            
+        # 继续检查
+        self.root.after(100, self._check_playback_status)
     
     def _stop_audio(self):
-        """停止播放音频"""
-        if self.is_playing:
-            pygame.mixer.music.stop()
-            self.is_playing = False
-            self._log("已停止播放")
-        
-        self.play_btn.config(state="normal")
-        self.stop_btn.config(state="disabled")
+        """停止音频播放"""
+        pygame.mixer.stop()
+        self.is_playing = False
+        self.root.after(0, lambda: self.play_btn.config(state="normal"))
+        self.root.after(0, lambda: self.stop_btn.config(state="disabled"))
+        self._log("已停止播放")
     
     def _save_audio(self):
-        """根据模式保存音频"""
-        mode = self.mode_var.get()
-        if mode == "text":
+        """保存音频到文件"""
+        if self.mode_var.get() == "text" and self.audio_data:
             self._save_text_audio()
-        else:
+        elif self.mode_var.get() == "subtitle" and self.audio_segments:
             self._save_subtitle_audio()
+        else:
+            messagebox.showinfo("提示", "没有可保存的音频数据")
     
     def _save_text_audio(self):
         """保存文本生成的音频"""
-        if not self.base64_audio:
-            messagebox.showerror("错误", "无音频数据，请先生成！")
-            return
-        
-        save_path = filedialog.asksaveasfilename(
+        file_path = filedialog.asksaveasfilename(
             defaultextension=".mp3",
-            filetypes=[("MP3文件", "*.mp3")],
-            title="保存合成语音"
+            filetypes=[("MP3文件", "*.mp3"), ("所有文件", "*.*")],
+            title="保存音频文件"
         )
-        if not save_path:
-            return
         
-        self._log(f"开始保存MP3到：{save_path}")
-        self.save_btn.config(state="disabled")
-        
-        threading.Thread(
-            target=self._save_text_thread,
-            args=(save_path,),
-            daemon=True
-        ).start()
-    
-    def _save_text_thread(self, save_path):
-        """保存文本音频的线程"""
-        try:
-            audio_bytes = base64.b64decode(self.base64_audio)
-            
-            with open(save_path, "wb") as f:
-                f.write(audio_bytes)
-            
-            if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
-                file_size = os.path.getsize(save_path) / 1024
-                self._log(f"保存成功！文件大小：{file_size:.1f}KB")
-                self.root.after(0, lambda: messagebox.showinfo("成功", f"MP3已保存至：\n{save_path}"))
-            else:
-                self._log("错误：保存的文件为空或不存在")
-        
-        except base64.binascii.Error:
-            self._log("错误：Base64解码失败，音频数据格式错误")
-        except IOError as e:
-            self._log(f"文件写入错误：{str(e)}")
-        except Exception as e:
-            self._log(f"保存错误：{str(e)}")
-        finally:
-            self.root.after(0, lambda: self.save_btn.config(state="normal"))
+        if file_path:
+            try:
+                with open(file_path, "wb") as f:
+                    f.write(self.audio_data)
+                self._log(f"音频已保存到：{file_path}")
+                messagebox.showinfo("成功", f"音频已保存到：{file_path}")
+            except Exception as e:
+                self._log(f"保存音频失败：{str(e)}")
+                messagebox.showerror("错误", f"保存音频失败：{str(e)}")
     
     def _save_subtitle_audio(self):
-        """保存字幕生成的所有音频片段"""
-        if not self.audio_segments:
-            messagebox.showerror("错误", "无音频数据，请先生成！")
-            return
-        
-        save_path = filedialog.asksaveasfilename(
+        """保存字幕生成的音频（合并为一个文件）"""
+        file_path = filedialog.asksaveasfilename(
             defaultextension=".mp3",
-            filetypes=[("MP3文件", "*.mp3")],
-            title="保存全部配音"
+            filetypes=[("MP3文件", "*.mp3"), ("所有文件", "*.*")],
+            title="保存音频文件"
         )
-        if not save_path:
-            return
         
-        self._log(f"开始保存音频到：{save_path}")
-        self.save_btn.config(state="disabled")
-        
-        threading.Thread(
-            target=self._save_subtitle_thread,
-            args=(save_path,),
-            daemon=True
-        ).start()
-    
-    def _save_subtitle_thread(self, save_path):
-        """保存字幕音频的线程"""
-        try:
-            # 拼接所有音频片段
-            with open(save_path, "wb") as f:
-                for segment in self.audio_segments:
-                    f.write(segment['audio'])
-            
-            if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
-                file_size = os.path.getsize(save_path) / 1024
-                self._log(f"保存成功！文件大小：{file_size:.1f}KB")
-                self.root.after(0, lambda: messagebox.showinfo("成功", f"音频已保存至：\n{save_path}"))
-            else:
-                self._log("错误：保存的文件为空或不存在")
-        
-        except IOError as e:
-            self._log(f"文件写入错误：{str(e)}")
-        except Exception as e:
-            self._log(f"保存错误：{str(e)}")
-        finally:
-            self.root.after(0, lambda: self.save_btn.config(state="normal"))
+        if file_path:
+            try:
+                # 简单合并（实际应用中可能需要更复杂的处理来保证间隙正确）
+                with open(file_path, "wb") as f:
+                    for segment in self.audio_segments:
+                        f.write(segment['data'])
+                
+                self._log(f"合并音频已保存到：{file_path}")
+                messagebox.showinfo("成功", f"合并音频已保存到：{file_path}")
+            except Exception as e:
+                self._log(f"保存音频失败：{str(e)}")
+                messagebox.showerror("错误", f"保存音频失败：{str(e)}")
 
-
-# 程序入口
 if __name__ == "__main__":
-    try:
-        # 检查Python版本
-        if sys.version_info < (3, 6):
-            raise Exception("Python版本过低，需要Python 3.6及以上版本")
-        
-        # 检查并安装必要的库
-        def install(package):
-            import subprocess
-            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-        
-        try:
-            from cryptography.fernet import Fernet
-        except ImportError:
-            install("cryptography")
-        
-        # 启动GUI
-        root = tk.Tk()
-        # 确保中文显示正常
-        root.option_add("*Font", ("SimHei", 10))
-        app = VolcanoTTS(root)
-        root.mainloop()
-    
-    except Exception as e:
-        error_msg = f"启动失败：{str(e)}\n\n请检查：\n1. Python版本是否为3.6及以上\n2. 是否已安装必要库（运行：pip install requests pygame cryptography）\n3. 代码是否完整复制"
-        print(error_msg, file=sys.stderr)
-        # 尝试显示图形化错误提示
-        try:
-            root = tk.Tk()
-            root.withdraw()  # 隐藏主窗口
-            messagebox.showerror("启动错误", error_msg)
-            root.destroy()
-        except:
-            pass
+    root = tk.Tk()
+    app = VolcanoTTS(root)
+    root.mainloop()
