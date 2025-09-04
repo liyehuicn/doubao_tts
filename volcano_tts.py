@@ -11,6 +11,7 @@ import base64
 import pygame
 import re
 from io import BytesIO
+from cryptography.fernet import Fernet  # 需要安装cryptography库
 
 class VolcanoTTS:
     def __init__(self, root):
@@ -18,6 +19,9 @@ class VolcanoTTS:
         self.root.title("火山引擎语音合成（双模式版）")
         self.root.geometry("850x750")
         self.root.resizable(False, False)  
+        
+        # 创建加密密钥
+        self._create_crypto_key()
         
         # 创建主容器，用于更好地管理布局
         self.main_container = ttk.Frame(root)
@@ -43,12 +47,48 @@ class VolcanoTTS:
         # 初始化界面
         self._init_ui()
     
+    def _create_crypto_key(self):
+        """创建加密密钥，用于加密敏感信息"""
+        key_path = "crypto.key"
+        if not os.path.exists(key_path):
+            try:
+                key = Fernet.generate_key()
+                with open(key_path, "wb") as f:
+                    f.write(key)
+                # 限制密钥文件权限
+                os.chmod(key_path, 0o600)
+            except Exception as e:
+                self._log(f"创建加密密钥失败: {str(e)}")
+                raise
+        
+        try:
+            with open(key_path, "rb") as f:
+                self.cipher_suite = Fernet(f.read())
+        except Exception as e:
+            self._log(f"加载加密密钥失败: {str(e)}")
+            raise
+    
+    def _encrypt_data(self, data):
+        """加密数据"""
+        if not data:
+            return ""
+        return self.cipher_suite.encrypt(data.encode()).decode()
+    
+    def _decrypt_data(self, data):
+        """解密数据"""
+        if not data:
+            return ""
+        try:
+            return self.cipher_suite.decrypt(data.encode()).decode()
+        except:
+            return ""  # 解密失败返回空
+    
     def _load_config(self):
-        """加载外部配置文件"""
+        """加载外部配置文件（加密存储敏感信息）"""
         config_path = "config.json"
         default_config = {
-            "api_key": "11111",
-            "voice_id": "22222"
+            "api_key": "",
+            "voice_id": ""
         }
         
         # 如果配置文件不存在则创建
@@ -56,6 +96,8 @@ class VolcanoTTS:
             try:
                 with open(config_path, "w", encoding="utf-8") as f:
                     json.dump(default_config, f, ensure_ascii=False, indent=2)
+                # 限制配置文件权限
+                os.chmod(config_path, 0o600)
                 return default_config
             except Exception as e:
                 self._log(f"创建配置文件失败: {str(e)}")
@@ -64,21 +106,32 @@ class VolcanoTTS:
         # 读取配置文件
         try:
             with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                config = json.load(f)
+            
+            # 解密配置信息
+            return {
+                "api_key": self._decrypt_data(config.get("api_key", "")),
+                "voice_id": self._decrypt_data(config.get("voice_id", ""))
+            }
         except Exception as e:
             self._log(f"读取配置文件失败: {str(e)}")
             return default_config
     
     def _save_config(self):
-        """保存配置到外部文件"""
+        """保存配置到外部文件（加密存储敏感信息）"""
         config_path = "config.json"
         try:
+            # 加密配置信息后保存
+            encrypted_config = {
+                "api_key": self._encrypt_data(self.api_key_entry.get().strip()),
+                "voice_id": self._encrypt_data(self.voice_id_entry.get().strip())
+            }
+            
             with open(config_path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "api_key": self.api_key_entry.get().strip(),
-                    "voice_id": self.voice_id_entry.get().strip()
-                }, f, ensure_ascii=False, indent=2)
-            self._log("配置已保存到config.json")
+                json.dump(encrypted_config, f, ensure_ascii=False, indent=2)
+            # 限制配置文件权限
+            os.chmod(config_path, 0o600)
+            self._log("配置已加密保存到config.json")
         except Exception as e:
             self._log(f"保存配置文件失败: {str(e)}")
     
@@ -91,9 +144,19 @@ class VolcanoTTS:
         api_row = ttk.Frame(api_frame)
         api_row.pack(fill=tk.X, pady=5)
         ttk.Label(api_row, text="api-key：").pack(side=tk.LEFT, padx=(0, 10))
-        self.api_key_entry = ttk.Entry(api_row, width=50)
+        self.api_key_entry = ttk.Entry(api_row, width=50, show="*")  # 密码框显示方式
         self.api_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.api_key_entry.insert(0, self.default_api_key)
+        
+        # 添加显示/隐藏密码按钮
+        self.show_api_key = tk.BooleanVar(value=False)
+        self.api_key_toggle = ttk.Checkbutton(
+            api_row, 
+            text="显示", 
+            variable=self.show_api_key,
+            command=self._toggle_api_key_visibility
+        )
+        self.api_key_toggle.pack(side=tk.LEFT, padx=(5, 10))
         
         # 2. 音色配置区域
         voice_frame = ttk.LabelFrame(self.main_container, text="2. 音色配置", padding=(15, 10))
@@ -103,12 +166,24 @@ class VolcanoTTS:
         voice_row = ttk.Frame(voice_frame)
         voice_row.pack(fill=tk.X, pady=5)
         ttk.Label(voice_row, text="voice_type：").pack(side=tk.LEFT, padx=(0, 10))
-        self.voice_id_entry = ttk.Entry(voice_row, width=50)
+        self.voice_id_entry = ttk.Entry(voice_row, width=50, show="*")  # 密码框显示方式
         self.voice_id_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
         self.voice_id_entry.insert(0, self.voice_id)
+        
+        # 添加显示/隐藏按钮
+        self.show_voice_id = tk.BooleanVar(value=False)
+        self.voice_id_toggle = ttk.Checkbutton(
+            voice_row, 
+            text="显示", 
+            variable=self.show_voice_id,
+            command=self._toggle_voice_id_visibility
+        )
+        self.voice_id_toggle.pack(side=tk.LEFT, padx=(5, 10))
+        
         config_btn = ttk.Button(voice_row, text="保存配置", command=self._save_config)
         config_btn.pack(side=tk.LEFT)
         
+        # 以下为其他原有代码，保持不变...
         # 3. 配音模式选择
         mode_frame = ttk.LabelFrame(self.main_container, text="3. 配音模式", padding=(15, 10))
         mode_frame.pack(fill=tk.X, padx=20, pady=5)
@@ -184,6 +259,21 @@ class VolcanoTTS:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.config(yscrollcommand=scrollbar.set)
     
+    def _toggle_api_key_visibility(self):
+        """切换API Key显示/隐藏状态"""
+        if self.show_api_key.get():
+            self.api_key_entry.config(show="")
+        else:
+            self.api_key_entry.config(show="*")
+    
+    def _toggle_voice_id_visibility(self):
+        """切换Voice ID显示/隐藏状态"""
+        if self.show_voice_id.get():
+            self.voice_id_entry.config(show="")
+        else:
+            self.voice_id_entry.config(show="*")
+    
+    # 以下为其他原有方法，保持不变...
     def _switch_mode(self):
         """切换配音模式"""
         mode = self.mode_var.get()
@@ -740,6 +830,16 @@ if __name__ == "__main__":
         if sys.version_info < (3, 6):
             raise Exception("Python版本过低，需要Python 3.6及以上版本")
         
+        # 检查并安装必要的库
+        def install(package):
+            import subprocess
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
+        
+        try:
+            from cryptography.fernet import Fernet
+        except ImportError:
+            install("cryptography")
+        
         # 启动GUI
         root = tk.Tk()
         # 确保中文显示正常
@@ -748,7 +848,7 @@ if __name__ == "__main__":
         root.mainloop()
     
     except Exception as e:
-        error_msg = f"启动失败：{str(e)}\n\n请检查：\n1. Python版本是否为3.6及以上\n2. 是否已安装必要库（运行：pip install requests pygame）\n3. 代码是否完整复制"
+        error_msg = f"启动失败：{str(e)}\n\n请检查：\n1. Python版本是否为3.6及以上\n2. 是否已安装必要库（运行：pip install requests pygame cryptography）\n3. 代码是否完整复制"
         print(error_msg, file=sys.stderr)
         # 尝试显示图形化错误提示
         try:
@@ -758,4 +858,3 @@ if __name__ == "__main__":
             root.destroy()
         except:
             pass
-    
