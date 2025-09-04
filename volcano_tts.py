@@ -29,8 +29,8 @@ class VolcanoTTS:
         
         # 配置参数
         self.config = self._load_config()
-        self.default_api_key = self.config.get("api_key", "11111")
-        self.voice_id = self.config.get("voice_id", "22222")
+        self.default_api_key = self.config.get("api_key", "")
+        self.voice_id = self.config.get("voice_id", "")
         
         # 音频相关变量
         self.base64_audio = None
@@ -183,7 +183,6 @@ class VolcanoTTS:
         config_btn = ttk.Button(voice_row, text="保存配置", command=self._save_config)
         config_btn.pack(side=tk.LEFT)
         
-        # 以下为其他原有代码，保持不变...
         # 3. 配音模式选择
         mode_frame = ttk.LabelFrame(self.main_container, text="3. 配音模式", padding=(15, 10))
         mode_frame.pack(fill=tk.X, padx=20, pady=5)
@@ -273,7 +272,6 @@ class VolcanoTTS:
         else:
             self.voice_id_entry.config(show="*")
     
-    # 以下为其他原有方法，保持不变...
     def _switch_mode(self):
         """切换配音模式"""
         mode = self.mode_var.get()
