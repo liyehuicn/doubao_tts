@@ -24,7 +24,7 @@ class VoiceSynthesisApp:
         # 应用状态变量
         self.api_key = ""
         self.voice_id = ""  # 保留内部使用，不显示在界面
-        self.voice_ids = {}
+        self.voice_ids = {}  # 存储音色名称到ID的映射 {name: voice_id}
         self.config_file = "config.json"
         self.temp_audio_file = None
         self.audio_data = None
@@ -118,8 +118,9 @@ class VoiceSynthesisApp:
         # 1. 语音控制区域
         self.control_frame = tk.LabelFrame(self.main_frame, text="语音参数控制", padx=5, pady=5)
         self.control_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
-        self.control_frame.grid_columnconfigure(1, weight=1)
-        self.control_frame.grid_columnconfigure(3, weight=1)
+        # 增加列数配置以容纳音色选择
+        for i in range(9):
+            self.control_frame.grid_columnconfigure(i, weight=1 if i in [1,3,7] else 0)
         
         # 音量控制
         tk.Label(self.control_frame, text="音量:").grid(row=0, column=0, sticky=tk.W, pady=5, padx=5)
@@ -152,6 +153,20 @@ class VoiceSynthesisApp:
         self.rate_label = tk.Label(self.control_frame, text=f"{self.speech_rate:.1f}x (暂不生效)")
         self.rate_label.grid(row=0, column=5, padx=5)
         
+        # 音色选择下拉菜单
+        tk.Label(self.control_frame, text="选择音色:").grid(row=0, column=6, sticky=tk.W, pady=5, padx=5)
+        self.voice_combobox = ttk.Combobox(self.control_frame, state="readonly", width=15)
+        self.voice_combobox.grid(row=0, column=7, sticky=tk.EW, pady=5, padx=5)
+        self.voice_combobox.bind("<<ComboboxSelected>>", self.on_voice_selected)
+
+        # 添加刷新音色列表按钮
+        self.refresh_voices_btn = tk.Button(
+            self.control_frame, 
+            text="刷新列表", 
+            command=self.refresh_voice_combobox
+        )
+        self.refresh_voices_btn.grid(row=0, column=8, padx=5, pady=5)
+        
         # SDK参数提示
         tip_label = tk.Label(
             self.control_frame, 
@@ -159,7 +174,7 @@ class VoiceSynthesisApp:
             fg="red",
             font=('SimHei', 9)
         )
-        tip_label.grid(row=1, column=0, columnspan=6, pady=5, padx=5, sticky=tk.W)
+        tip_label.grid(row=1, column=0, columnspan=9, pady=5, padx=5, sticky=tk.W)
         
         # 2. 合成模式选择
         self.mode_frame = tk.LabelFrame(self.main_frame, text="合成模式选择", padx=5, pady=5)
@@ -301,11 +316,51 @@ class VoiceSynthesisApp:
         
         # 初始化UI
         self.update_mode_ui()
+        self.refresh_voice_combobox()  # 初始化音色列表
         self.log_message("应用已启动")
         self.log_message("提示：当前SDK版本暂不支持音量/语速参数传递")
         if self.voice_id:
             self.log_message(f"已加载保存的Voice ID")
             self.log_message("提示：Voice ID通过'设置-语音复刻设置'管理")
+    
+    def refresh_voice_combobox(self):
+        """刷新音色下拉列表"""
+        # 保存当前选中项
+        current_selection = self.voice_combobox.get()
+        
+        # 清空现有选项
+        self.voice_combobox['values'] = []
+        
+        # 添加所有已保存的音色
+        if self.voice_ids:
+            voice_names = list(self.voice_ids.keys())
+            self.voice_combobox['values'] = voice_names
+            
+            # 尝试恢复之前的选择
+            if current_selection in voice_names:
+                self.voice_combobox.set(current_selection)
+            else:
+                # 默认选择当前激活的音色
+                for name, voice_id in self.voice_ids.items():
+                    if voice_id == self.voice_id_var.get():
+                        self.voice_combobox.set(name)
+                        break
+                else:
+                    # 如果没有匹配项，选择第一个
+                    if voice_names:
+                        self.voice_combobox.current(0)
+        else:
+            self.voice_combobox.set("无可用音色")
+            self.log_message("提示：请先在语音复刻设置中创建或添加音色")
+    
+    def on_voice_selected(self, event):
+        """处理音色选择事件"""
+        selected_name = self.voice_combobox.get()
+        if selected_name in self.voice_ids:
+            selected_voice_id = self.voice_ids[selected_name]
+            self.voice_id_var.set(selected_voice_id)
+            self.save_config()
+            self.log_message(f"已选择音色: {selected_name}")
     
     def update_mode_ui(self):
         """更新模式UI"""
@@ -401,7 +456,7 @@ class VoiceSynthesisApp:
         self.close_api_btn.pack(side=tk.LEFT, padx=10)
     
     def create_voice_settings_dialog(self):
-        """创建语音复刻设置对话框（支持自适应宽度）"""
+        """创建语音复刻设置对话框（支持手动添加Voice ID）"""
         self.voice_dialog = tk.Toplevel(self.root)
         self.voice_dialog.title("语音复刻设置")
         self.voice_dialog.geometry("600x500")  # 初始大小
@@ -418,12 +473,12 @@ class VoiceSynthesisApp:
         notebook = ttk.Notebook(main_frame)
         notebook.pack(fill=tk.BOTH, expand=True, pady=5)
         
-        # 1. 创建语音选项卡（支持自适应宽度）
+        # 1. 创建语音选项卡
         create_frame = ttk.Frame(notebook, padding=10)
         notebook.add(create_frame, text="创建语音")
         
         # 配置创建语音选项卡的列权重
-        create_frame.grid_columnconfigure(1, weight=1)  # 输入框列自适应宽度
+        create_frame.grid_columnconfigure(1, weight=1)
         
         tk.Label(create_frame, text="音频文件URL或本地路径:").grid(row=0, column=0, sticky=tk.W, pady=5, padx=5)
         self.audio_url_entry = tk.Entry(create_frame)
@@ -463,12 +518,12 @@ class VoiceSynthesisApp:
         )
         self.create_voice_btn.grid(row=3, column=3, padx=5, pady=5)
         
-        # 2. 管理语音选项卡（支持自适应宽度）
+        # 2. 管理语音选项卡（包含手动添加Voice ID功能）
         manage_frame = ttk.Frame(notebook, padding=10)
         notebook.add(manage_frame, text="管理语音")
         
         # 配置管理语音选项卡的列权重
-        manage_frame.grid_columnconfigure(1, weight=1)  # 输入框列自适应宽度
+        manage_frame.grid_columnconfigure(1, weight=1)
         
         # 当前Voice ID显示
         tk.Label(manage_frame, text="当前Voice ID:").grid(row=0, column=0, sticky=tk.W, pady=5, padx=5)
@@ -476,67 +531,71 @@ class VoiceSynthesisApp:
         self.voice_id_dialog_entry.grid(row=0, column=1, columnspan=3, sticky=tk.EW, pady=5, padx=5)
         
         # 手动输入Voice ID区域
-        tk.Label(manage_frame, text="手动输入Voice ID:").grid(row=1, column=0, sticky=tk.W, pady=5, padx=5)
-        self.manual_voice_id_entry = tk.Entry(manage_frame)
-        self.manual_voice_id_entry.grid(row=1, column=1, sticky=tk.EW, pady=5, padx=5)
+        manual_frame = tk.Frame(manage_frame)
+        manual_frame.grid(row=1, column=0, columnspan=4, sticky=tk.EW, pady=10)
+        manual_frame.grid_columnconfigure(1, weight=1)
         
-        tk.Label(manage_frame, text="语音名称:").grid(row=1, column=2, sticky=tk.W, pady=5, padx=5)
-        self.manual_voice_name_entry = tk.Entry(manage_frame, width=15)
-        self.manual_voice_name_entry.grid(row=1, column=3, sticky=tk.W, pady=5, padx=5)
+        tk.Label(manual_frame, text="手动添加Voice ID:").grid(row=0, column=0, sticky=tk.W, pady=5, padx=5)
+        self.manual_voice_id_entry = tk.Entry(manual_frame)
+        self.manual_voice_id_entry.grid(row=0, column=1, sticky=tk.EW, pady=5, padx=5)
+        self.manual_voice_id_entry.insert(0, "cosyvoice-v2-xxxxxx")
+        
+        tk.Label(manual_frame, text="语音名称:").grid(row=0, column=2, sticky=tk.W, pady=5, padx=5)
+        self.manual_voice_name_entry = tk.Entry(manual_frame, width=15)
+        self.manual_voice_name_entry.grid(row=0, column=3, sticky=tk.W, pady=5, padx=5)
+        self.manual_voice_name_entry.insert(0, "手动添加的声音")
         
         self.add_manual_voice_btn = tk.Button(
-            manage_frame, 
-            text="添加Voice ID", 
+            manual_frame, 
+            text="添加", 
             command=self.add_manual_voice
         )
-        self.add_manual_voice_btn.grid(row=1, column=4, padx=5, pady=5)
+        self.add_manual_voice_btn.grid(row=0, column=4, padx=5, pady=5)
         
-        # 语音列表显示区域（自适应宽度和高度）
+        # 语音列表显示区域
         tk.Label(manage_frame, text="已保存的语音列表:").grid(row=2, column=0, sticky=tk.W, pady=10, padx=5)
         
-        # 创建列表框容器并配置权重
         list_frame = tk.Frame(manage_frame)
         list_frame.grid(row=3, column=0, columnspan=4, sticky=tk.NSEW, pady=5, padx=5)
         list_frame.grid_columnconfigure(0, weight=1)
         list_frame.grid_rowconfigure(0, weight=1)
         
-        # 创建列表框
         self.voice_listbox = tk.Listbox(list_frame, height=8, width=50)
         self.voice_listbox.grid(row=0, column=0, sticky=tk.NSEW)
         
-        # 添加滚动条
         scrollbar = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.voice_listbox.yview)
         scrollbar.grid(row=0, column=1, sticky=tk.NS)
         self.voice_listbox.config(yscrollcommand=scrollbar.set)
         
-        # 添加删除按钮
+        # 列表操作按钮
+        btn_frame = tk.Frame(manage_frame)
+        btn_frame.grid(row=4, column=0, columnspan=4, sticky=tk.EW, pady=10)
+        
+        self.set_default_btn = tk.Button(
+            btn_frame, 
+            text="设为默认", 
+            command=self.set_default_voice
+        )
+        self.set_default_btn.pack(side=tk.LEFT, padx=5)
+        
         self.delete_voice_btn = tk.Button(
-            manage_frame, 
-            text="删除选中语音", 
+            btn_frame, 
+            text="删除选中", 
             command=self.delete_selected_voice
         )
-        self.delete_voice_btn.grid(row=4, column=0, pady=10, padx=5, sticky=tk.W)
+        self.delete_voice_btn.pack(side=tk.LEFT, padx=5)
         
-        # 配置行权重，使列表区域能够自适应高度
+        # 配置行权重
         manage_frame.grid_rowconfigure(3, weight=1)
         
         # 加载已有Voice ID到列表
         self.refresh_voice_list()
         
-        # 绑定列表双击事件（切换选中Voice ID）
+        # 绑定列表双击事件
         self.voice_listbox.bind('<Double-1>', self.on_voice_select)
     
-    def browse_audio_file(self):
-        """浏览并选择本地音频文件"""
-        file_path = filedialog.askopenfilename(
-            filetypes=[("音频文件", "*.mp3;*.wav;*.flac;*.m4a"), ("所有文件", "*.*")]
-        )
-        if file_path:
-            self.audio_url_entry.delete(0, tk.END)
-            self.audio_url_entry.insert(0, file_path)
-    
     def add_manual_voice(self):
-        """处理手动添加Voice ID的逻辑"""
+        """手动添加Voice ID的核心功能实现"""
         # 获取输入的Voice ID和名称
         voice_id = self.manual_voice_id_entry.get().strip()
         voice_name = self.manual_voice_name_entry.get().strip()
@@ -569,6 +628,7 @@ class VoiceSynthesisApp:
         
         # 刷新列表显示
         self.refresh_voice_list()
+        self.refresh_voice_combobox()  # 同步更新主界面的下拉列表
         
         # 清空输入框并提示成功
         self.manual_voice_id_entry.delete(0, tk.END)
@@ -588,31 +648,6 @@ class VoiceSynthesisApp:
             if voice_id == self.voice_id_var.get():
                 self.voice_listbox.selection_set(tk.END)
     
-    def delete_selected_voice(self):
-        """删除选中的Voice ID"""
-        selected_index = self.voice_listbox.curselection()
-        if not selected_index:
-            messagebox.showinfo("提示", "请先选中要删除的语音")
-            return
-            
-        # 获取选中的名称
-        selected_text = self.voice_listbox.get(selected_index)
-        voice_name = selected_text.split(" (")[0]  # 提取名称部分
-        
-        if messagebox.askyesno("确认删除", f"确定要删除语音'{voice_name}'吗?"):
-            del self.voice_ids[voice_name]
-            # 如果删除的是当前选中的ID，自动切换
-            if self.voice_id_var.get() == self.voice_ids.get(voice_name, ""):
-                if self.voice_ids:
-                    # 切换到第一个语音
-                    first_name = next(iter(self.voice_ids.keys()))
-                    self.voice_id_var.set(self.voice_ids[first_name])
-                else:
-                    self.voice_id_var.set("")
-            self.save_config()
-            self.refresh_voice_list()
-            self.log_message(f"已删除语音: {voice_name}")
-    
     def on_voice_select(self, event):
         """双击列表项切换选中的Voice ID"""
         selected_index = self.voice_listbox.curselection()
@@ -627,6 +662,53 @@ class VoiceSynthesisApp:
             self.voice_id_var.set(selected_voice_id)
             self.save_config()
             self.log_message(f"已切换到语音: {voice_name}")
+            self.refresh_voice_combobox()  # 同步更新主界面下拉列表
+    
+    def set_default_voice(self):
+        """设为默认语音"""
+        selection = self.voice_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("提示", "请先选择一个语音")
+            return
+            
+        index = selection[0]
+        voice_names = list(self.voice_ids.keys())
+        if 0 <= index < len(voice_names):
+            selected_name = voice_names[index]
+            selected_id = self.voice_ids[selected_name]
+            self.voice_id = selected_id
+            self.voice_id_var.set(selected_id)
+            self.save_config()
+            self.log_message(f"已设置默认音色: {selected_name}")
+            messagebox.showinfo("成功", f"已设置默认音色: {selected_name}")
+            self.refresh_voice_combobox()  # 同步更新主界面下拉列表
+    
+    def delete_selected_voice(self):
+        """删除选中的语音"""
+        selection = self.voice_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("提示", "请先选择一个语音")
+            return
+            
+        index = selection[0]
+        voice_names = list(self.voice_ids.keys())
+        if 0 <= index < len(voice_names):
+            selected_name = voice_names[index]
+            selected_id = self.voice_ids[selected_name]
+            
+            if messagebox.askyesno("确认", f"确定要删除音色 '{selected_name}' 吗？"):
+                del self.voice_ids[selected_name]
+                
+                # 如果删除的是当前默认语音，清空默认设置
+                if selected_id == self.voice_id:
+                    self.voice_id = ""
+                    self.voice_id_var.set("")
+                
+                self.save_config()
+                self.refresh_voice_list()
+                self.refresh_voice_combobox()  # 同步更新主界面下拉列表
+                
+                self.log_message(f"已删除音色: {selected_name}")
     
     def show_api_settings(self):
         """显示API设置对话框"""
@@ -656,12 +738,14 @@ class VoiceSynthesisApp:
         else:
             messagebox.showerror("输入错误", "API密钥不能为空")
     
-    def browse_output_dir(self):
-        """浏览输出目录"""
-        directory = filedialog.askdirectory()
-        if directory:
-            self.output_dir_entry.delete(0, tk.END)
-            self.output_dir_entry.insert(0, directory)
+    def browse_audio_file(self):
+        """浏览并选择本地音频文件"""
+        file_path = filedialog.askopenfilename(
+            filetypes=[("音频文件", "*.mp3;*.wav;*.flac;*.m4a"), ("所有文件", "*.*")]
+        )
+        if file_path:
+            self.audio_url_entry.delete(0, tk.END)
+            self.audio_url_entry.insert(0, file_path)
     
     def browse_subtitle_file(self):
         """浏览字幕文件"""
@@ -778,6 +862,112 @@ class VoiceSynthesisApp:
         
         # 合并为极文，使用空行分隔段落
         return '\n'.join(clean_lines)
+    
+    def browse_output_dir(self):
+        """浏览输出目录"""
+        directory = filedialog.askdirectory()
+        if directory:
+            self.output_dir_entry.delete(0, tk.END)
+            self.output_dir_entry.insert(0, directory)
+    
+    def start_create_voice_thread(self):
+        """启动创建语音的线程"""
+        if not self.api_key:
+            messagebox.showwarning("提示", "请先在设置中配置API密钥")
+            self.show_api_settings()
+            return
+            
+        # 禁用按钮防止重复点击
+        self.create_voice_btn.config(state=tk.DISABLED)
+        
+        # 启动创建语音线程
+        threading.Thread(
+            target=self.create_voice,
+            daemon=True
+        ).start()
+    
+    def create_voice(self):
+        """创建语音复刻"""
+        try:
+            self.log_message("开始创建语音复刻...")
+            
+            # 检查API密钥
+            if not self.api_key:
+                messagebox.showerror("错误", "请先在设置中配置API密钥")
+                self.log_message("创建失败：未设置API密钥")
+                return
+        
+            # 检查是否复用现有voice_id
+            if self.reuse_voice_var.get() and self.voice_id:
+                self.log_message(f"复用现有Voice ID: {self.voice_id}")
+                messagebox.showinfo("信息", f"已复用现有Voice ID: {self.voice_id}")
+                return
+        
+            # 获取参数
+            url_or_path = self.audio_url_entry.get().strip()
+            prefix = self.prefix_entry.get().strip()
+            target_model = "cosyvoice-v2"
+            voice_name = self.voice_name_entry.get().strip() or f"语音_{datetime.now().strftime('%H%M%S')}"
+            
+            if not url_or_path or url_or_path == "https://your-audio-file-url":
+                messagebox.showerror("错误", "请输入有效的音频文件URL或选择本地文件")
+                self.log_message("创建失败：音频文件URL无效")
+                return
+            
+            if not prefix:
+                messagebox.showerror("错误", "请输入前缀")
+                self.log_message("创建失败：未输入前缀")
+                return
+            
+            # 设置API密钥
+            dashscope.api_key = self.api_key
+            
+            # 创建语音注册服务实例
+            service = VoiceEnrollmentService()
+            
+            # 判断是URL还是本地文件路径
+            if os.path.exists(url_or_path):
+                self.log_message("警告：使用本地文件路径，需要确保文件可公开访问")
+                url = url_or_path
+            else:
+                url = url_or_path
+            
+            # 调用create_voice方法复刻声音，并生成voice_id
+            self.log_message("正在创建语音，请稍候...")
+            # 获取原始voice_id
+            raw_voice_id = service.create_voice(
+                target_model=target_model, 
+                prefix=prefix, 
+                url=url
+            )
+            
+            # 构建完整的voice_id，确保包含模型前缀
+            if not raw_voice_id.startswith(f"{target_model}-"):
+                self.voice_id = f"{target_model}-{raw_voice_id}"
+            else:
+                self.voice_id = raw_voice_id
+            
+            # 更新界面显示
+            self.root.after(0, lambda: self.voice_id_var.set(self.voice_id))
+            
+            # 自动保存到语音列表
+            self.voice_ids[voice_name] = self.voice_id
+            
+            # 保存配置
+            self.save_config()
+            self.root.after(0, self.refresh_voice_list)
+            self.root.after(0, self.refresh_voice_combobox)
+            
+            self.log_message(f"语音创建成功，Voice ID: {self.voice_id}")
+            self.log_message(f"Request ID: {service.get_last_request_id()}")
+            messagebox.showinfo("成功", f"语音创建成功\nVoice ID: {self.voice_id}")
+            
+        except Exception as e:
+            error_msg = f"创建语音失败: {str(e)}"
+            self.log_message(error_msg)
+            messagebox.showerror("错误", error_msg)
+        finally:
+            self.root.after(0, lambda: self.create_voice_btn.config(state=tk.NORMAL))
     
     def start_synthesize_based_on_mode(self):
         """根据当前模式启动合成"""
@@ -1014,104 +1204,6 @@ class VoiceSynthesisApp:
             self.log_message(f"处理片段时出错: {str(e)}")
             return None
     
-    def start_create_voice_thread(self):
-        """启动创建语音的线程"""
-        if not self.api_key:
-            messagebox.showwarning("提示", "请先在设置中配置API密钥")
-            self.show_api_settings()
-            return
-            
-        # 禁用按钮防止重复点击
-        self.create_voice_btn.config(state=tk.DISABLED)
-        
-        # 启动创建语音线程
-        threading.Thread(
-            target=self.create_voice,
-            daemon=True
-        ).start()
-    
-    def create_voice(self):
-        """创建语音复刻"""
-        try:
-            self.log_message("开始创建语音复刻...")
-            
-            # 检查API密钥
-            if not self.api_key:
-                messagebox.showerror("错误", "请先在设置中配置API密钥")
-                self.log_message("创建失败：未设置API密钥")
-                return
-        
-            # 检查是否复用现有voice_id
-            if self.reuse_voice_var.get() and self.voice_id:
-                self.log_message(f"复用现有Voice ID: {self.voice_id}")
-                messagebox.showinfo("信息", f"已复用现有Voice ID: {self.voice_id}")
-                return
-        
-            # 获取参数
-            url_or_path = self.audio_url_entry.get().strip()
-            prefix = self.prefix_entry.get().strip()
-            target_model = "cosyvoice-v2"
-            
-            if not url_or_path or url_or_path == "https://your-audio-file-url":
-                messagebox.showerror("错误", "请输入有效的音频文件URL或选择本地文件")
-                self.log_message("创建失败：音频文件URL无效")
-                return
-            
-            if not prefix:
-                messagebox.showerror("错误", "请输入前缀")
-                self.log_message("创建失败：未输入前缀")
-                return
-            
-            # 设置API密钥
-            dashscope.api_key = self.api_key
-            
-            # 创建语音注册服务实例
-            service = VoiceEnrollmentService()
-            
-            # 判断是URL还是本地文件路径
-            if os.path.exists(url_or_path):
-                self.log_message("警告：使用本地文件路径，需要确保文件可公开访问")
-                url = url_or_path
-            else:
-                url = url_or_path
-            
-            # 调用create_voice方法复刻声音，并生成voice_id
-            self.log_message("正在创建语音，请稍候...")
-            # 获取原始voice_id
-            raw_voice_id = service.create_voice(
-                target_model=target_model, 
-                prefix=prefix, 
-                url=url
-            )
-            
-            # 构建完整的voice_id，确保包含模型前缀
-            if not raw_voice_id.startswith(f"{target_model}-"):
-                self.voice_id = f"{target_model}-{raw_voice_id}"
-            else:
-                self.voice_id = raw_voice_id
-            
-            # 更新界面显示
-            self.root.after(0, lambda: self.voice_id_var.set(self.voice_id))
-            
-            # 自动保存到语音列表
-            voice_name = self.voice_name_entry.get().strip() or f"语音_{datetime.now().strftime('%H%M%S')}"
-            self.voice_ids[voice_name] = self.voice_id
-            
-            # 保存配置
-            self.save_config()
-            self.root.after(0, self.refresh_voice_list)
-            
-            self.log_message(f"语音创建成功，Voice ID: {self.voice_id}")
-            self.log_message(f"Request ID: {service.get_last_request_id()}")
-            messagebox.showinfo("成功", f"语音创建成功\nVoice ID: {self.voice_id}")
-            
-        except Exception as e:
-            error_msg = f"创建语音失败: {str(e)}"
-            self.log_message(error_msg)
-            messagebox.showerror("错误", error_msg)
-        finally:
-            self.root.after(0, lambda: self.create_voice_btn.config(state=tk.NORMAL))
-    
     def play_audio(self):
         """播放合成的语音"""
         if not self.temp_audio_file or not os.path.exists(self.temp_audio_file):
@@ -1178,7 +1270,6 @@ class VoiceSynthesisApp:
     
     def on_resize(self, event):
         """窗口大小变化时调整布局"""
-        # 响应式布局调整逻辑
         pass
 
 if __name__ == "__main__":
